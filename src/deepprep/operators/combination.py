@@ -47,6 +47,59 @@ def _split_on(on: Any) -> tuple[list[str], list[str]]:
     return cols, cols
 
 
+def _align_join_keys(ldf: pd.DataFrame, lk: str, rdf: pd.DataFrame, rk: str) -> None:
+    """Make two join keys of differing dtype comparable, in place.
+
+    A nullable foreign key read back as ``float64`` against an ``int64`` primary
+    key is the single most common cause of a silently empty join.  Casting both
+    sides straight to ``str`` does *not* fix it -- it makes it worse, because
+    ``101`` renders as ``"101"`` while ``101.0`` renders as ``"101.0"`` and the
+    join then matches nothing at all.
+
+    So numeric pairs are aligned numerically, and integral floats are narrowed to
+    integers before any string fallback is considered.
+    """
+    ls, rs = ldf[lk], rdf[rk]
+    l_num = pd.api.types.is_numeric_dtype(ls) and not pd.api.types.is_bool_dtype(ls)
+    r_num = pd.api.types.is_numeric_dtype(rs) and not pd.api.types.is_bool_dtype(rs)
+
+    if l_num and r_num:
+        ldf[lk] = _narrow_numeric(ls)
+        rdf[rk] = _narrow_numeric(rs)
+        return
+
+    # Mixed numeric/text keys: render the numeric side without a spurious ".0"
+    # so that 101 and "101" join, which is what the user means.
+    if l_num != r_num:
+        ldf[lk] = _as_key_string(ls) if l_num else ls.astype(str)
+        rdf[rk] = _as_key_string(rs) if r_num else rs.astype(str)
+        return
+
+    ldf[lk] = ls.astype(str)
+    rdf[rk] = rs.astype(str)
+
+
+def _narrow_numeric(s: pd.Series) -> pd.Series:
+    """Cast a float column of whole numbers to nullable Int64."""
+    if pd.api.types.is_float_dtype(s):
+        nonnull = s.dropna()
+        if len(nonnull) and (nonnull == nonnull.round()).all():
+            return s.astype("Int64")
+    return s
+
+
+def _as_key_string(s: pd.Series) -> pd.Series:
+    """Render a numeric key as text, dropping the trailing ".0" of whole floats."""
+    def fmt(v: Any) -> Any:
+        if pd.isna(v):
+            return None
+        if isinstance(v, float) and v.is_integer():
+            return str(int(v))
+        return str(v)
+
+    return s.map(fmt)
+
+
 class Join(Operator):
     NAME = "Join"
     CATEGORY = "combination"
@@ -87,12 +140,9 @@ class Join(Operator):
             )
 
         ldf, rdf = lt.df.copy(), rt.df.copy()
-        # Merging across mismatched dtypes (a very common cause of silently empty
-        # joins) is normalised to string when the raw dtypes are incompatible.
         for lk, rk in zip(left_keys, right_keys, strict=True):
             if ldf[lk].dtype != rdf[rk].dtype:
-                ldf[lk] = ldf[lk].astype(str)
-                rdf[rk] = rdf[rk].astype(str)
+                _align_join_keys(ldf, lk, rdf, rk)
 
         try:
             out = ldf.merge(

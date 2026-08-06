@@ -102,11 +102,14 @@ def test_columns_are_matched_by_name_when_names_agree():
     assert not table_match(swapped_values, gold)
 
 
-def test_column_bijection_is_found_when_names_differ():
+def test_renamed_columns_are_rejected_by_default():
+    """A rename is not a permutation: Sigma* fixes the column names, and Sec 5.2
+    names "renaming columns" as the canonical reward hack."""
     gold = pd.DataFrame({"a": [1, 2], "b": ["x", "y"]})
     renamed = pd.DataFrame({"zzz": ["x", "y"], "qqq": [1, 2]})
-    assert table_match(renamed, gold)
-    assert not table_match(renamed, gold, MatchOptions(require_column_names=True))
+    assert not table_match(renamed, gold)
+    # The value-signature bijection stays available, but must be asked for.
+    assert table_match(renamed, gold, MatchOptions(require_column_names=False))
 
 
 def test_none_tables_never_match():

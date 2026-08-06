@@ -205,8 +205,14 @@ def test_cleaning_operators(simple_tables):
     out = parse_operator_call("MissingValueImputation(people, salary, mean)").execute(t)
     assert out["people"].df["salary"].notna().all()
 
+    # Sec 2.2.1 says ErrorDetection *identifies* invalid records, so the paper's
+    # 3-argument form flags rather than deletes.
     out = parse_operator_call("ErrorDetection(people, salary, lambda v: v is not None and v > 1000)").execute(t)
-    assert len(out["people"].df) == 4  # the 5000 outlier row is dropped
+    assert out["people"].df["salary_is_error"].tolist() == [False, False, False, False, True]
+    out = parse_operator_call(
+        "ErrorDetection(people, salary, lambda v: v is not None and v > 1000, remove)"
+    ).execute(t)
+    assert len(out["people"].df) == 4
 
     out = parse_operator_call("OutlierDetection(people, salary, flag)").execute(t)
     assert "salary_is_outlier" in out["people"].columns
@@ -287,6 +293,8 @@ def test_reshaping_operators(simple_tables):
     t = simple_tables
     out = parse_operator_call("Explode(people, tags, sep=',')").execute(t)
     assert len(out["people"].df) == 7  # a,b / c / c / b,c / a
+    # Without an explicit separator a plain string column is left intact.
+    assert len(parse_operator_call("Explode(people, tags)").execute(t)["people"].df) == 5
 
     out = parse_operator_call("Stack(people, [id], [salary])").execute(t)
     assert set(out["people"].columns) == {"id", "variable", "value"}

@@ -309,8 +309,9 @@ class ReasoningTree:
             return self.root, None
 
         node = self.root
+        inexact: list[str] = []
         for i, step in enumerate(steps):
-            child = self._match_child(node, step)
+            child, exact = self._match_child(node, step)
             if child is None:
                 return node, (
                     f"PrefixMismatch: no recorded edge from {node.id} matches operator "
@@ -323,7 +324,21 @@ class ReasoningTree:
                     f"The referenced prefix ends in the failed transition {step!r}, which has "
                     f"no materialized state. Expanding from {node.id} instead."
                 )
+            if not exact:
+                inexact.append(f"{step!r} -> {child.edge_source!r}")
             node = child
+
+        if inexact:
+            # Never resolve inexactly *and* silently: the agent would then be
+            # reasoning about a state other than the one it named, with no way to
+            # notice. Sec 4.2 adopts the prefix constraint precisely because it
+            # "avoids ambiguous ... node references".
+            return node, (
+                f"InexactPrefix: the referenced prefix did not match the recorded "
+                f"operators exactly; it was resolved to {node.id} by operator name and "
+                f"target table only. Mismatched steps: {'; '.join(inexact)}. Copy the "
+                f"operators from the tree verbatim to address a node unambiguously."
+            )
         return node, None
 
     def resolve_longest_prefix(self, steps: list[str]) -> tuple[Node, list[str]]:
@@ -334,26 +349,42 @@ class ReasoningTree:
         Sec 4.2 extracts "the root-to-leaf operator path associated with that
         node", and any suffix the agent invented but never executed is run from
         the matched node rather than from the root.
+
+        Matching here is **exact only**.  Reusing a materialized node under a
+        fuzzy match would substitute a state built by a *different* operator for
+        the one the answer names, silently yielding a wrong ``T_hat`` while
+        reporting a pipeline the agent never wrote.  An operator that fails to
+        match exactly is simply re-executed, which costs a little compute and
+        cannot be wrong.
         """
         node = self.root
         for i, step in enumerate(steps):
-            child = self._match_child(node, step)
-            if child is None or child.failed:
+            child, exact = self._match_child(node, step, allow_fuzzy=False)
+            if child is None or not exact or child.failed:
                 return node, steps[i:]
             node = child
         return node, []
 
     @staticmethod
-    def _match_child(node: Node, step: str) -> Node | None:
-        """Match one operator of a prefix against the edges leaving ``node``."""
+    def _match_child(
+        node: Node, step: str, allow_fuzzy: bool = True
+    ) -> tuple[Node | None, bool]:
+        """Match one operator of a prefix against the edges leaving ``node``.
+
+        Returns ``(child, exact)``.  ``exact`` is ``False`` when the match was
+        made by the coarse key (operator name plus target table) rather than by
+        full parameter equality, so callers can refuse it or warn about it.
+        """
         target = _canonical(step)
         for c in node.children:
             if _canonical(c.edge_source) == target:
-                return c
+                return c, True
+        if not allow_fuzzy:
+            return None, False
         coarse = _coarse_key(step)
         matches = [c for c in node.children if _coarse_key(c.edge_source) == coarse]
         # Only accept the fuzzy match when it is unambiguous.
-        return matches[0] if len(matches) == 1 else None
+        return (matches[0], False) if len(matches) == 1 else (None, False)
 
     # -- rendering ---------------------------------------------------------- #
     def render(

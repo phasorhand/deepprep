@@ -115,6 +115,10 @@ class SFTTrainer:
         if cfg.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
             self.model.config.use_cache = False
+            # Required with LoRA: the base weights are frozen, so without this no
+            # input to a checkpointed segment requires grad.
+            if hasattr(self.model, "enable_input_require_grads"):
+                self.model.enable_input_require_grads()
 
         if cfg.use_lora:
             from peft import LoraConfig, get_peft_model

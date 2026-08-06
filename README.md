@@ -112,14 +112,42 @@ deepprep train-grpo       --tasks data/synth_spider/train.jsonl --model <stage2-
 ## Data synthesis (§5.3)
 
 ```bash
-deepprep synthesize --spider data/spider --split train --out data/synth_spider/train.jsonl
+deepprep synthesize \
+  --db-root data/spider/database \
+  --spec    data/spider/train_spider.json \
+  --out     data/synth_spider/train.jsonl
 ```
 
-Converts NL2SQL cases into ADP tasks, then applies **reversible noise injection**: each
-corruption is the *inverse* of a cleaning operator and is kept only if applying that
-cleaning operator restores the previous table state exactly.
+Converts NL2SQL cases into ADP tasks: the gold SQL is executed to obtain `T*`, translated
+into an operator pipeline, and the **shortest candidate that exactly reproduces `T*`** is
+kept. Then **reversible noise injection** dirties the sources — each corruption is the
+*inverse* of a cleaning operator and is retained only if applying that cleaning operator
+restores the previous table state exactly. The final gold pipeline is the cleaning pipeline
+concatenated with the task pipeline.
+
+Everything runs offline; pass `--use-llm --model ...` to use an LLM at the three points the
+paper does (target schema spec, candidate pipelines, inverse transformation logic).
 
 ---
+
+## Fidelity notes
+
+Where the paper is silent or under-specified, these are the choices made and why. They are
+all reachable from code comments too; this is the index.
+
+| Topic | Paper | Here |
+|---|---|---|
+| Operator count | "31 operators" in 8 categories, but §2.2 enumerates 30 (5+3+7+3+3+3+5+1) | The 31st is `Terminate`, the control operator Figure 4 shows closing an extracted pipeline |
+| `α, β, γ` (Eq. 6) | not published | `0.7 / 0.3 / 0.15`, chosen so a correct trajectory *always* outranks an incorrect one — otherwise `R_llm` would itself be hackable |
+| `R_llm` judge | "an instruction-tuned LLM (e.g. GPT-4o)" | `LLMProcessJudge` does exactly that; `HeuristicProcessJudge` is a deterministic structural approximation so RL and the tests run without a second model |
+| `S_cnt` (Eq. 8) | positional: `1[D_hat[c]_i = D*[c]_i]` | rows are canonically sorted first, otherwise a pure row permutation would score ≈0 despite being an exact match |
+| Exact match | "invariant to row and column **permutations**" | column *names* are required by default (a rename is not a permutation, and §5.2 names renaming as the canonical reward hack). `MatchOptions(require_column_names=False)` restores value-signature matching |
+| Float equality | "exact cell-value equality" | quantized to `float_tol=1e-6`; two pipelines computing the same mean in a different operator order differ in the last ULP |
+| `ErrorDetection` | `(table, column, func)`, "*identifies* invalid records" | defaults to `action='flag'`; `'remove'`/`'null'` are opt-in extensions |
+| `Explode` | "a column containing **list-valued** entries" | string splitting requires an explicit `sep`, so a plain text column is never silently shredded |
+| `Count` / `CalculateStatistic` | described as returning scalars | materialized as 1×1 tables, since every operator must be `T → T` (§2.1) |
+| `<execute>` transport | trajectory `r_t` "encapsulates both the current tree state and the agent's generated response" | environment output is a *user* message, so §5.2's "mask tokens inside `<execute>`" reduces to masking to assistant tokens. `refine_mask_to_action_tags` handles the inlined form |
+| Node addressing | prefix-matching constraint | a bare `n2` reference is also accepted (Figure 4's plans say "rollback to n2"); an inexact prefix resolves but **always** returns a warning, and `<answer>` resolution is exact-only |
 
 ## Safety note
 

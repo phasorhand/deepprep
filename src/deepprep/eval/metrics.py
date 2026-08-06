@@ -20,6 +20,8 @@
 
 from __future__ import annotations
 
+import math
+import re
 from collections import Counter
 from collections.abc import Hashable
 from dataclasses import dataclass
@@ -57,20 +59,46 @@ class MatchOptions:
     float_tol: float = 1e-6
     strip_strings: bool = True
     case_sensitive: bool = True
-    #: Require the produced column *names* to equal the gold ones.  The paper's
-    #: metric is permutation-invariant over columns; when names disagree entirely
-    #: we fall back to matching columns by their value signature.
-    require_column_names: bool = False
+    #: Require the produced column *names* to equal the gold ones.
+    #:
+    #: The paper's metric is invariant to column *permutations*, and a rename is
+    #: not a permutation: the task is to produce a table conforming to the target
+    #: schema Sigma*, whose column names are given.  Accepting arbitrary names
+    #: would also make the metric structurally blind to the exact reward hack
+    #: Sec 5.2 names -- "renaming columns without performing the required data
+    #: cleaning" -- which R_llm exists to catch.  Set to False to fall back to
+    #: matching columns by their value signature.
+    require_column_names: bool = True
 
 
 _NULL = "\x00<NULL>"
+_NON_FINITE = "\x00<NONFINITE:%s>"
+
+#: Strings coerced to the number they denote.  Deliberately stricter than
+#: ``float()``: it rejects zero-padded values ("0123" is an identifier, not 123)
+#: and Python's underscore separators ("1_0"), both of which would otherwise make
+#: two genuinely different cells compare equal.
+_NUMERIC_STRING = re.compile(r"^[+-]?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$")
+
+
+def _quantize(f: float, tol: float) -> Hashable:
+    """Snap a float to a ``tol``-sized grid, keeping non-finite values hashable.
+
+    ``round(f / tol)`` returns an ``int`` and therefore raises on NaN/inf; an
+    unguarded exception here escapes ``evaluate()`` and aborts an entire run.
+    """
+    if not math.isfinite(f):
+        return _NON_FINITE % f
+    if tol > 0:
+        return round(f / tol) * tol
+    return f
 
 
 def _normalize_cell(v: Any, opt: MatchOptions) -> Hashable:
     """Map a cell to a hashable canonical form."""
     if v is None or v is pd.NaT or v is pd.NA:
         return _NULL
-    if isinstance(v, float) and np.isnan(v):
+    if isinstance(v, float) and math.isnan(v):
         return _NULL
     try:
         if pd.isna(v):
@@ -83,11 +111,7 @@ def _normalize_cell(v: Any, opt: MatchOptions) -> Hashable:
     if isinstance(v, (int, np.integer)):
         return float(v)
     if isinstance(v, (float, np.floating)):
-        f = float(v)
-        if opt.float_tol > 0:
-            # Quantize so that 8.699999999999999 and 8.7 collapse together.
-            return round(f / opt.float_tol) * opt.float_tol
-        return f
+        return _quantize(float(v), opt.float_tol)
     if isinstance(v, (pd.Timestamp, np.datetime64)):
         return str(pd.Timestamp(v))
     if isinstance(v, (list, tuple, set)):
@@ -101,18 +125,29 @@ def _normalize_cell(v: Any, opt: MatchOptions) -> Hashable:
     # A numeric-looking string must compare equal to the number it denotes,
     # otherwise a CastType left undone would be scored as a content error rather
     # than the type error it is.
-    try:
-        f = float(s)
-    except (TypeError, ValueError):
-        return s
-    if opt.float_tol > 0:
-        return round(f / opt.float_tol) * opt.float_tol
-    return f
+    if _NUMERIC_STRING.match(s):
+        try:
+            return _quantize(float(s), opt.float_tol)
+        except (TypeError, ValueError, OverflowError):
+            return s
+    return s
+
+
+def _column_values(df: pd.DataFrame, col: Any) -> list[Any]:
+    """Values of one column, tolerating duplicate column labels."""
+    got = df[col]
+    if isinstance(got, pd.DataFrame):
+        # A duplicated label selects a frame; take the first occurrence rather
+        # than raising, so a malformed prediction scores 0 instead of crashing.
+        got = got.iloc[:, 0]
+    return got.tolist()
 
 
 def _normalize_frame(df: pd.DataFrame, opt: MatchOptions) -> list[list[Hashable]]:
     """Column-major normalized values."""
-    return [[_normalize_cell(v, opt) for v in df[c].tolist()] for c in df.columns]
+    return [
+        [_normalize_cell(v, opt) for v in _column_values(df, c)] for c in df.columns
+    ]
 
 
 def _rows_equal(a_cols: list[list[Hashable]], b_cols: list[list[Hashable]]) -> bool:
@@ -235,8 +270,14 @@ def partial_similarity(
     if pred is None or gold is None:
         return out
 
-    p_names = {str(c) for c in pred.columns}
-    g_names = {str(c) for c in gold.columns}
+    # Column labels are compared as strings (a pivot on an integer `year` yields
+    # integer labels), so the frames are relabelled up front. Indexing later with
+    # the stringified name would otherwise raise KeyError on the original frame.
+    pred = _stringify_columns(pred)
+    gold = _stringify_columns(gold)
+
+    p_names = set(pred.columns)
+    g_names = set(gold.columns)
 
     # S_sch -- Jaccard over column names.
     union = p_names | g_names
@@ -257,8 +298,8 @@ def partial_similarity(
         denom = max(n_p, n_g)
         total = 0.0
         for c in matched:
-            pc = [_normalize_cell(v, opt) for v in p_sorted[c].tolist()]
-            gc = [_normalize_cell(v, opt) for v in g_sorted[c].tolist()]
+            pc = [_normalize_cell(v, opt) for v in _column_values(p_sorted, c)]
+            gc = [_normalize_cell(v, opt) for v in _column_values(g_sorted, c)]
             # Row counts may differ; the denominator is max(|D_hat|,|D*|), so pairing
             # only the overlapping prefix is what Eq. (8) intends.
             hits = sum(1 for a, b in zip(pc, gc, strict=False) if a == b)
@@ -269,6 +310,16 @@ def partial_similarity(
     return out
 
 
+def _stringify_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Relabel columns as strings without copying the data."""
+    labels = [str(c) for c in df.columns]
+    if labels == list(df.columns):
+        return df
+    out = df.copy(deep=False)
+    out.columns = labels
+    return out
+
+
 def _sort_for_alignment(
     df: pd.DataFrame, cols: list[str], opt: MatchOptions
 ) -> pd.DataFrame:
@@ -276,7 +327,7 @@ def _sort_for_alignment(
     if len(df) == 0:
         return df
     key = pd.DataFrame(
-        {c: [str(_normalize_cell(v, opt)) for v in df[c].tolist()] for c in cols},
+        {c: [str(_normalize_cell(v, opt)) for v in _column_values(df, c)] for c in cols},
         index=df.index,
     )
     order = key.sort_values(by=cols, kind="mergesort").index

@@ -179,8 +179,10 @@ class Explode(Operator):
     PARAMS = (
         ParamSpec("table", kind="table"),
         ParamSpec("column", kind="column"),
-        ParamSpec("sep", required=False, default=",",
-                  doc="separator used to split string-encoded lists; None disables splitting"),
+        ParamSpec("sep", required=False, default=None,
+                  doc="separator for string-encoded lists, e.g. ','. Omit it to explode "
+                      "only genuine list values: splitting every comma-bearing string by "
+                      "default would shred values such as 'Smith, John'"),
         ParamSpec("strip", required=False, default=True,
                   doc="strip whitespace around the produced values"),
     )

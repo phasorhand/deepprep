@@ -73,7 +73,6 @@ class GRPOConfig:
     n_epochs: int = 1
     #: Inner PPO-style epochs over each collected batch.
     inner_epochs: int = 1
-    micro_batch_size: int = 1
     max_length: int = 8192
     #: PPO clipping range.
     clip_eps: float = 0.2
@@ -187,6 +186,10 @@ class GRPOTrainer:
         if cfg.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
             self.model.config.use_cache = False
+            # With PEFT the base weights are frozen, so without this no input to a
+            # checkpointed segment requires grad and the adapter receives None.
+            if hasattr(self.model, "enable_input_require_grads"):
+                self.model.enable_input_require_grads()
         if cfg.use_lora:
             from peft import LoraConfig, get_peft_model
 

@@ -100,8 +100,11 @@ _OPERATOR_CLASSES: tuple[type[Operator], ...] = (
 #: name -> singleton instance.  Operators are stateless, so one instance suffices.
 OPERATORS: dict[str, Operator] = {cls.NAME: cls() for cls in _OPERATOR_CLASSES}
 
+# Sec 2.2 enumerates 30 data preparation operators (5+3+7+3+3+3+5+1) and states
+# a total of 31; the 31st is the control operator Terminate, which Figure 4 shows
+# closing an extracted pipeline.
 assert len(OPERATORS) == len(_OPERATOR_CLASSES) == 31, (
-    f"expected the paper's 31 operators, registry has {len(OPERATORS)}"
+    f"expected 30 data preparation operators plus Terminate, registry has {len(OPERATORS)}"
 )
 
 

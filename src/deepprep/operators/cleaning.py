@@ -24,6 +24,21 @@ __all__ = [
 ]
 
 
+def _fill_missing(df: pd.DataFrame, col: str, missing: pd.Series, value: Any) -> None:
+    """Write ``value`` into the missing cells of ``col``, in place.
+
+    Under pandas' StringDtype an assignment of a number into a text column raises
+    rather than upcasting, so a mixed column is widened to ``object`` first.  The
+    alternative -- coercing the column -- would destroy the non-missing values
+    this operator is not allowed to touch.
+    """
+    try:
+        df.loc[missing, col] = value
+    except (TypeError, ValueError):
+        df[col] = df[col].astype(object)
+        df.loc[missing, col] = value
+
+
 class DropNA(Operator):
     NAME = "DropNA"
     CATEGORY = "cleaning"
@@ -65,6 +80,11 @@ class MissingValueImputation(Operator):
         s = df[col]
         mode = (p["mode"] or "mean").lower()
 
+        # Sec 2.2.1: this operator "imputes MISSING values". Only cells that are
+        # actually missing may be written; a value that merely fails to parse as a
+        # number is data, not a hole, and overwriting it would silently destroy it.
+        missing = s.isna()
+
         if mode in ("mean", "median"):
             numeric = pd.to_numeric(s, errors="coerce")
             if numeric.notna().sum() == 0:
@@ -74,7 +94,7 @@ class MissingValueImputation(Operator):
                     f"categorical columns."
                 )
             fill = numeric.mean() if mode == "mean" else numeric.median()
-            df[col] = numeric.fillna(fill)
+            _fill_missing(df, col, missing, fill)
         elif mode == "mode":
             m = s.mode(dropna=True)
             if len(m) == 0:
@@ -88,7 +108,7 @@ class MissingValueImputation(Operator):
         elif mode == "bfill":
             df[col] = s.bfill()
         elif mode == "zero":
-            df[col] = pd.to_numeric(s, errors="coerce").fillna(0)
+            _fill_missing(df, col, missing, 0)
         else:  # constant
             if p["value"] is None:
                 raise OperatorError(
@@ -130,10 +150,11 @@ class ErrorDetection(Operator):
         ParamSpec("column", kind="column"),
         ParamSpec("func", kind="func",
                   doc="predicate over a cell value; True means the value is erroneous"),
-        ParamSpec("action", required=False, default="remove",
-                  choices=("remove", "flag", "null"),
-                  doc="'remove' drops offending rows, 'flag' adds an <column>_is_error "
-                      "boolean column, 'null' replaces offending values with NaN"),
+        ParamSpec("action", required=False, default="flag",
+                  choices=("flag", "remove", "null"),
+                  doc="'flag' adds a <column>_is_error boolean column (the default: "
+                      "Sec 2.2.1 says this operator *identifies* invalid records), "
+                      "'remove' drops the offending rows, 'null' blanks the values"),
     )
 
     def apply(self, tables: TableSet, /, **p: Any) -> TableSet:
@@ -142,7 +163,7 @@ class ErrorDetection(Operator):
         fn = callable_param(p["func"], self.NAME, "func")
         df = t.df.copy()
         bad = apply_elementwise(df[col], fn, self.NAME).astype(bool)
-        action = p["action"] or "remove"
+        action = p["action"] or "flag"
         if action == "remove":
             df = df[~bad].reset_index(drop=True)
         elif action == "flag":

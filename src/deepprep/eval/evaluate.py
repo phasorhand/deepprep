@@ -174,7 +174,9 @@ def evaluate(
         cost_mode = "api" if (pricing or model in API_PRICING) else "gpu"
 
     opts = match_options or MatchOptions()
-    results: dict[str, CaseResult] = {}
+    # Keyed by position, not task_id: duplicate ids in a task file would otherwise
+    # collapse into a single case and silently shrink the denominator.
+    results: dict[int, CaseResult] = {}
     t0 = time.perf_counter()
 
     def run_one(task: ADPTask) -> CaseResult:
@@ -210,26 +212,26 @@ def evaluate(
     if max_workers <= 1:
         for i, task in enumerate(tasks):
             cr = run_one(task)
-            results[task.task_id] = cr
+            results[i] = cr
             if on_case:
                 on_case(cr)
             if verbose:
                 _progress(i + 1, len(tasks), results.values())
     else:
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {pool.submit(run_one, t): t for t in tasks}
-            for i, fut in enumerate(as_completed(futures)):
+            futures = {pool.submit(run_one, t): i for i, t in enumerate(tasks)}
+            for done, fut in enumerate(as_completed(futures)):
                 cr = fut.result()
-                results[cr.task_id] = cr
+                results[futures[fut]] = cr
                 if on_case:
                     on_case(cr)
                 if verbose:
-                    _progress(i + 1, len(tasks), results.values())
+                    _progress(done + 1, len(tasks), results.values())
     if verbose:
         print()
 
     # Preserve the input order for reproducible reports.
-    cases = [results[t.task_id] for t in tasks if t.task_id in results]
+    cases = [results[i] for i in range(len(tasks)) if i in results]
     n = len(cases) or 1
     report = EvalReport(
         method=method,

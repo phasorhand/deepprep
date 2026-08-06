@@ -205,19 +205,28 @@ def refine_mask_to_action_tags(
     """
     mask = list(seq.action_mask)
     for start, end in seq.spans:
-        text = tokenizer.decode(seq.input_ids[start:end], skip_special_tokens=False)
-        keep = _char_keep_mask(text, keep_tags)
+        # The character mask must be built over the SAME string the per-token
+        # offsets are measured against.  Decoding the span in one call and then
+        # advancing a cursor by `len(decode([tok]))` drifts whenever the batch
+        # decode is not the exact concatenation of the single-token decodes --
+        # the normal case for SentencePiece's word marker and for any tokenizer
+        # that re-inserts separators.  The drift accumulates, so the later tokens
+        # of a turn receive the mask of an entirely different region: exactly
+        # inverting Sec 5.2 by training on <execute> and dropping <plan>.
+        pieces = [
+            tokenizer.decode([seq.input_ids[t]], skip_special_tokens=False)
+            for t in range(start, end)
+        ]
+        keep = _char_keep_mask("".join(pieces), keep_tags)
         if all(keep):
             continue
-        # Map character decisions back to tokens by decoding cumulatively; a
-        # token is kept only if every character it contributes is kept.
+        # A token survives only if every character it contributes is kept.
         pos = 0
-        for t in range(start, end):
-            piece = tokenizer.decode([seq.input_ids[t]], skip_special_tokens=False)
+        for offset, piece in enumerate(pieces):
             nxt = pos + len(piece)
             window = keep[pos:nxt]
             if window and not all(window):
-                mask[t] = 0
+                mask[start + offset] = 0
             pos = nxt
     return MaskedSequence(input_ids=seq.input_ids, action_mask=mask, spans=seq.spans)
 
