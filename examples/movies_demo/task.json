@@ -1,0 +1,327 @@
+{
+  "task_id": "movies_demo",
+  "sources": [
+    {
+      "name": "movies",
+      "schema": {
+        "description": "Movies, one row per release. Contains duplicate records.",
+        "columns": [
+          {
+            "name": "id",
+            "dtype": "int64",
+            "description": "Movie identifier."
+          },
+          {
+            "name": "title",
+            "dtype": "object",
+            "description": "Movie title; formatting is inconsistent."
+          },
+          {
+            "name": "dir_id",
+            "dtype": "int64",
+            "description": "Foreign key to directors.id."
+          },
+          {
+            "name": "genres",
+            "dtype": "object",
+            "description": "Comma-separated list of genre labels."
+          }
+        ]
+      },
+      "data": {
+        "index": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "columns": [
+          "id",
+          "title",
+          "dir_id",
+          "genres"
+        ],
+        "data": [
+          [
+            1,
+            "  Jurassic Park ",
+            101,
+            "Sci-Fi"
+          ],
+          [
+            1,
+            "  Jurassic Park ",
+            101,
+            "Sci-Fi"
+          ],
+          [
+            17,
+            "the dark knight",
+            103,
+            "Sci-Fi, Action"
+          ],
+          [
+            7,
+            "AVATAR",
+            102,
+            "Sci-Fi"
+          ],
+          [
+            23,
+            "Inception",
+            103,
+            "Sci-Fi"
+          ],
+          [
+            31,
+            "Titanic",
+            102,
+            "Action"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "directors",
+      "schema": {
+        "description": "Directors.",
+        "columns": [
+          {
+            "name": "id",
+            "dtype": "int64",
+            "description": "Director identifier."
+          },
+          {
+            "name": "name",
+            "dtype": "object",
+            "description": "Full name of the director."
+          }
+        ]
+      },
+      "data": {
+        "index": [
+          0,
+          1,
+          2
+        ],
+        "columns": [
+          "id",
+          "name"
+        ],
+        "data": [
+          [
+            101,
+            "Steven Spielberg"
+          ],
+          [
+            102,
+            "James Cameron"
+          ],
+          [
+            103,
+            "Christopher Nolan"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "ratings",
+      "schema": {
+        "description": "Audience ratings, one row per movie per year.",
+        "columns": [
+          {
+            "name": "movie",
+            "dtype": "object",
+            "description": "Lower-cased movie title."
+          },
+          {
+            "name": "values",
+            "dtype": "object",
+            "description": "Score and year packed together, e.g. '8.2 (2022)'."
+          },
+          {
+            "name": "rating",
+            "dtype": "float64",
+            "description": "The score alone, without the year."
+          }
+        ]
+      },
+      "data": {
+        "index": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11
+        ],
+        "columns": [
+          "movie",
+          "values",
+          "rating"
+        ],
+        "data": [
+          [
+            "jurassic park",
+            "7.6 (2019)",
+            7.6
+          ],
+          [
+            "jurassic park",
+            "8.9 (2020)",
+            8.9
+          ],
+          [
+            "jurassic park",
+            "8.2 (2022)",
+            8.2
+          ],
+          [
+            "the dark knight",
+            "8.95 (2019)",
+            8.95
+          ],
+          [
+            "the dark knight",
+            "9.2 (2020)",
+            9.2
+          ],
+          [
+            "avatar",
+            "8.9 (2019)",
+            8.9
+          ],
+          [
+            "avatar",
+            "8.8 (2020)",
+            8.8
+          ],
+          [
+            "inception",
+            "8.8 (2019)",
+            8.8
+          ],
+          [
+            "inception",
+            "8.6 (2020)",
+            8.6
+          ],
+          [
+            "titanic",
+            "7.9 (2019)",
+            7.9
+          ],
+          [
+            "titanic",
+            "7.7 (2020)",
+            7.7
+          ],
+          [
+            "titanic",
+            "7.5 (2021)",
+            7.5
+          ]
+        ]
+      }
+    }
+  ],
+  "target_schema": {
+    "description": "I need a table containing ratings by genre for each director in 2019 and 2020. One row per (director, genre) pair.",
+    "columns": [
+      {
+        "name": "director_name",
+        "dtype": "object",
+        "description": "The name of the director."
+      },
+      {
+        "name": "genre",
+        "dtype": "object",
+        "description": "A single movie genre category (never multi-valued)."
+      },
+      {
+        "name": "2019",
+        "dtype": "float64",
+        "description": "Average rating for the director's movies in 2019."
+      },
+      {
+        "name": "2020",
+        "dtype": "float64",
+        "description": "Average rating for the director's movies in 2020."
+      }
+    ]
+  },
+  "target_table": {
+    "index": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "columns": [
+      "director_name",
+      "genre",
+      "2019",
+      "2020"
+    ],
+    "data": [
+      [
+        "Christopher Nolan",
+        "Action",
+        8.95,
+        9.2
+      ],
+      [
+        "Christopher Nolan",
+        "Sci-Fi",
+        8.875,
+        8.899999999999999
+      ],
+      [
+        "James Cameron",
+        "Action",
+        7.9,
+        7.7
+      ],
+      [
+        "James Cameron",
+        "Sci-Fi",
+        8.9,
+        8.8
+      ],
+      [
+        "Steven Spielberg",
+        "Sci-Fi",
+        7.6,
+        8.9
+      ]
+    ]
+  },
+  "gold_pipeline": [
+    "Deduplicate(movies, [id], first)",
+    "ValueTransform(movies, title, lambda x: str(x).strip().lower())",
+    "Explode(movies, genres, sep=\",\")",
+    "SelectColumn(ratings, [movie, values])",
+    "SplitColumn(ratings, values, [rating_value, year], sep=\" (\")",
+    "ValueTransform(ratings, year, lambda x: str(x).rstrip(\")\"))",
+    "CastType(ratings, rating_value, float)",
+    "Filter(ratings, lambda r: r[\"year\"] in (\"2019\", \"2020\"))",
+    "Join(movies, directors, on=(dir_id, id), how=inner, target=movies_directors_join)",
+    "Join(movies_directors_join, ratings, on=(title, movie), how=inner, target=joined)",
+    "RenameColumn(joined, {\"name\": \"director_name\", \"genres\": \"genre\"})",
+    "Pivot(joined, index=[director_name, genre], columns=[year], values=[rating_value], aggfunc=mean)",
+    "Terminate([joined])"
+  ],
+  "metadata": {
+    "source": "paper Figure 2 (running example)",
+    "paper": "arXiv:2602.07371"
+  }
+}
