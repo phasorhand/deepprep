@@ -11,3 +11,4 @@ htmlcov/
 checkpoints/
 runs/
 data/
+.env.local

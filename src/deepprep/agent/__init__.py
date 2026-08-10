@@ -10,7 +10,12 @@ from .actions import (
 )
 from .agent import DeepPrepAgent, SolveResult, TrajectoryStep, select_answer_table
 from .llm import HFClient, LLMClient, LLMResponse, OpenAIClient, ScriptedClient, Usage
-from .prompts import build_system_prompt, build_task_prompt, build_turn_prompt
+from .prompts import (
+    build_final_answer_prompt,
+    build_system_prompt,
+    build_task_prompt,
+    build_turn_prompt,
+)
 
 __all__ = [
     "ACTION_TAGS",
@@ -27,6 +32,7 @@ __all__ = [
     "SolveResult",
     "TrajectoryStep",
     "Usage",
+    "build_final_answer_prompt",
     "build_system_prompt",
     "build_task_prompt",
     "build_turn_prompt",

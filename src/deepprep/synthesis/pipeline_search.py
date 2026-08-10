@@ -738,6 +738,7 @@ class _Translator:
             right_cols = self.b.columns(tref.name)
             target = self._fresh("join")
             pair = on_by_alias.get(tref.alias.lower())
+            coalesced: set[str] = set()
             if pair is None:
                 # Comma-joins express the predicate in WHERE; a cross product is
                 # the faithful translation and the WHERE Filter restores it.
@@ -753,15 +754,30 @@ class _Translator:
                     f"Join({self.work}, {tref.name}, "
                     f"on={{'left': [{lk!r}], 'right': [{rk!r}]}}, how=inner, target={target})"
                 )
+                # A right key that shares its name with the left key it pairs
+                # with is merged into a single output column, so it does not
+                # appear on the right-hand side of the result.
+                if lk == rk:
+                    coalesced.add(rk)
+
             new_cols = self.b.columns(target)
-            # pandas.merge emits the left frame's columns first, then the right
-            # frame's (suffixed on collision), so positions map provenance back.
+            # pandas.merge emits every left column first, in order, then the
+            # surviving right columns, in order (suffixed on collision).
+            surviving_right = [c for c in right_cols if c not in coalesced]
+            if len(new_cols) != len(prev_cols) + len(surviving_right):
+                # Mapping provenance onto an unexpected layout would resolve
+                # SELECT items to the wrong columns *silently*; refuse instead.
+                raise TranslationError(
+                    f"join of {self.work!r} and {tref.name!r} produced "
+                    f"{len(new_cols)} columns, expected "
+                    f"{len(prev_cols) + len(surviving_right)}"
+                )
             owner: dict[str, tuple[str, str]] = {}
             for i, c in enumerate(new_cols):
                 if i < len(prev_cols):
                     owner[c] = self.owner[prev_cols[i]]
                 else:
-                    owner[c] = (tref.alias, right_cols[i - len(prev_cols)])
+                    owner[c] = (tref.alias, surviving_right[i - len(prev_cols)])
             self.owner = owner
             self.work = target
 

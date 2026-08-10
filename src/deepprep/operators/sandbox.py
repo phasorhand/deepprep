@@ -20,6 +20,7 @@ from __future__ import annotations
 import ast
 import builtins
 import datetime as _datetime
+import json as _json
 import math
 import os
 import re
@@ -46,6 +47,11 @@ _FORBIDDEN_NAMES = {
     "__class__",
     "__bases__",
     "__mro__",
+    # A whitelisted module must not become a bridge back to the interpreter.
+    "__loader__",
+    "__spec__",
+    "__dict__",
+    "__getattribute__",
     "eval",
     "exec",
     "compile",
@@ -60,7 +66,42 @@ _FORBIDDEN_NAMES = {
     "quit",
 }
 
-_ALLOWED_MODULES = {"pandas", "pd", "numpy", "np", "re", "math", "datetime", "json", "statistics"}
+#: Modules an ``ExeCode`` program may import, and the objects those imports
+#: resolve to.  The audit checks names statically; ``_safe_import`` enforces the
+#: same set again at run time, so neither check can be bypassed alone.
+_IMPORTABLE: dict[str, Any] = {
+    "pandas": pd,
+    "numpy": np,
+    "re": re,
+    "math": math,
+    "datetime": _datetime,
+    "json": _json,
+    "statistics": statistics,
+}
+
+_ALLOWED_MODULES = set(_IMPORTABLE)
+
+
+def _safe_import(
+    name: str,
+    globals: dict[str, Any] | None = None,  # noqa: A002 - matches __import__'s signature
+    locals: dict[str, Any] | None = None,  # noqa: A002
+    fromlist: tuple[str, ...] = (),
+    level: int = 0,
+) -> Any:
+    """The only ``__import__`` generated code can see.
+
+    Without this, the whitelist above was unreachable: ``import pandas`` passed
+    the audit and then failed with ``ImportError: __import__ not found``.
+    """
+    if level != 0:
+        raise SandboxError("relative imports are not allowed")
+    root = name.split(".")[0]
+    if root not in _IMPORTABLE or root != name:
+        raise SandboxError(
+            f"import of {name!r} is not allowed. Allowed modules: {sorted(_ALLOWED_MODULES)}"
+        )
+    return _IMPORTABLE[root]
 
 _SAFE_BUILTINS = {
     name: getattr(builtins, name)
@@ -85,7 +126,7 @@ def allow_exec() -> bool:
 def safe_globals(extra: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build the restricted namespace shared by lambdas and ``ExeCode``."""
     g: dict[str, Any] = {
-        "__builtins__": dict(_SAFE_BUILTINS),
+        "__builtins__": {**_SAFE_BUILTINS, "__import__": _safe_import},
         "pd": pd,
         "pandas": pd,
         "np": np,

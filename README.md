@@ -98,16 +98,24 @@ deepprep eval data/synth_spider/test.jsonl --model gpt-4o-mini --out runs/spider
 The three stages of the *Progressive Agentic Training* framework:
 
 ```bash
-# Stage 1 -- operator syntax learning (Eq. 4)
-deepprep train-op-syntax  --tasks data/synth_spider/train.jsonl --model Qwen/Qwen3-8B
+# Stage 1 -- operator syntax learning (Eq. 4): build D_op, then fine-tune on it
+deepprep build-op-syntax --tasks data/synth_spider/train.jsonl --out data/sft/op_syntax.jsonl
+deepprep train-sft       --data data/sft/op_syntax.jsonl --model Qwen/Qwen2.5-0.5B-Instruct \
+                         --out checkpoints/sft-stage1 --lora
 
 # Stage 2 -- reasoning procedure learning (Eq. 5), distilled from a teacher
-deepprep distill          --tasks data/synth_spider/train.jsonl --teacher deepseek-reasoner
-deepprep train-reasoning  --trajectories data/trajectories.jsonl --model <stage1-ckpt>
+deepprep distill         --tasks data/synth_spider/train.jsonl --out data/sft/distilled.jsonl \
+                         --teacher deepseek-reasoner --judge deepseek-chat
+deepprep train-sft       --data data/sft/distilled.jsonl --model checkpoints/sft-stage1 \
+                         --out checkpoints/sft-stage2 --lora
 
 # Stage 3 -- multi-turn GRPO with the hybrid reward (Eq. 6)
-deepprep train-grpo       --tasks data/synth_spider/train.jsonl --model <stage2-ckpt>
+deepprep train-grpo      --tasks data/synth_spider/train.jsonl --model checkpoints/sft-stage2
 ```
+
+`train-grpo` exposes the paper's settings (group 8, 2048 new tokens, bf16), which assume a
+GPU. `scripts/grpo_smoke.py` shrinks every dimension until one step fits on a laptop CPU —
+useful for checking the rollout → reward → masked-policy-gradient loop actually runs.
 
 ## Data synthesis (§5.3)
 
@@ -127,6 +135,16 @@ concatenated with the task pipeline.
 
 Everything runs offline; pass `--use-llm --model ...` to use an LLM at the three points the
 paper does (target schema spec, candidate pipelines, inverse transformation logic).
+
+Spider is a 1.3 GB download. `examples/mini_spider/build_db.py` writes a fixture with the
+same shape — `database/<db_id>/<db_id>.sqlite` plus a spec JSON — so the whole synthesis
+path is runnable in a second:
+
+```bash
+python examples/mini_spider/build_db.py data/mini_spider
+deepprep synthesize --db-root data/mini_spider/database \
+                    --spec data/mini_spider/spec.json --out data/tasks/synth_train.jsonl
+```
 
 ---
 
@@ -148,13 +166,16 @@ all reachable from code comments too; this is the index.
 | `Count` / `CalculateStatistic` | described as returning scalars | materialized as 1×1 tables, since every operator must be `T → T` (§2.1) |
 | `<execute>` transport | trajectory `r_t` "encapsulates both the current tree state and the agent's generated response" | environment output is a *user* message, so §5.2's "mask tokens inside `<execute>`" reduces to masking to assistant tokens. `refine_mask_to_action_tags` handles the inlined form |
 | Node addressing | prefix-matching constraint | a bare `n2` reference is also accepted (Figure 4's plans say "rollback to n2"); an inexact prefix resolves but **always** returns a warning, and `<answer>` resolution is exact-only |
+| Turn budget | "maximum exploration turns … set to 5" (§6.1) | 5 turns bound *exploration*; a model that spends all of them still gets one closing turn in which only `<answer>` is honoured. Without it the last-turn prompt asks for an answer the loop never allows, and a run whose leaf already matches `T*` is scored INCOMPLETE. `DeepPrepAgent(final_answer_turn=False)` restores the strict reading |
+| Self-joins | not discussed | the rule-based SQL→pipeline translator refuses them rather than emitting a wrong pipeline; `--use-llm` is the fallback, as in the paper |
 
 ## Safety note
 
 `ExeCode` and the function-valued operator parameters execute model-generated Python.
-`deepprep.operators.sandbox` restricts the namespace (no `os`, `open`, `eval`, no dunder
-traversal) but **this is a guardrail, not a security boundary**. Run untrusted workloads in
-a container, or disable code execution entirely:
+`deepprep.operators.sandbox` restricts the namespace to a whitelist — `pandas`, `numpy`,
+`re`, `math`, `datetime`, `json`, `statistics` are importable; `os`, `open`, `eval` and
+dunder traversal are not — but **this is a guardrail, not a security boundary**. Run
+untrusted workloads in a container, or disable code execution entirely:
 
 ```bash
 export DEEPPREP_ALLOW_EXEC=0
@@ -165,6 +186,10 @@ export DEEPPREP_ALLOW_EXEC=0
 ```bash
 uv run pytest -q          # no network access required; uses a scripted mock LLM
 ```
+
+The suite never calls an API. The SFT loop tests build a randomly initialized model in
+process and are skipped unless the `train` extra is installed; everything else runs with
+`pandas` alone.
 
 ## License
 

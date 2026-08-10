@@ -89,6 +89,11 @@ def _template(
     add_generation_prompt: bool,
     enable_thinking: bool | None,
 ) -> str:
+    if not messages:
+        # The context preceding the first message is the empty string.  Asking
+        # the template is not an option: transformers >= 5 raises on an empty
+        # conversation rather than returning the bare prefix.
+        return ""
     kwargs: dict[str, Any] = {
         "tokenize": False,
         "add_generation_prompt": add_generation_prompt,

@@ -30,7 +30,12 @@ from ..tree import Node, ReasoningTree
 from ..types import ADPTask, TableSchema, TableSet
 from .actions import AgentTurn, parse_agent_output
 from .llm import LLMClient, Usage
-from .prompts import build_system_prompt, build_task_prompt, build_turn_prompt
+from .prompts import (
+    build_final_answer_prompt,
+    build_system_prompt,
+    build_task_prompt,
+    build_turn_prompt,
+)
 
 __all__ = ["DeepPrepAgent", "SolveResult", "TrajectoryStep", "select_answer_table"]
 
@@ -198,6 +203,7 @@ class DeepPrepAgent:
         max_rows_in_prompt: int = 5,
         limits: EnvironmentLimits | None = None,
         verbose: bool = False,
+        final_answer_turn: bool = True,
     ) -> None:
         # "The maximum exploration turns of DeepPrep are set to 5." (Sec 6.1)
         self.llm = llm
@@ -209,6 +215,8 @@ class DeepPrepAgent:
         self.max_rows_in_prompt = max_rows_in_prompt
         self.limits = limits or EnvironmentLimits()
         self.verbose = verbose
+        # Sec 6.1 caps exploration; committing an answer is not exploration.
+        self.final_answer_turn = final_answer_turn
 
     # -- main loop ---------------------------------------------------------- #
     def solve(self, task: ADPTask) -> SolveResult:
@@ -302,6 +310,11 @@ class DeepPrepAgent:
             result.n_turns = turn + 1
 
         # ---- exhausted the turn budget ------------------------------------ #
+        # One closing turn to commit an answer. The tree is frozen: only
+        # <answer> is honoured, so this cannot buy an extra expansion.
+        if result.stop_reason == "" and self.final_answer_turn:
+            self._closing_answer_turn(task, env, tree, result, messages, feedback)
+
         if result.stop_reason == "":
             result.stop_reason = "max_turns"
             self._set_fallback(task, tree, result)
@@ -441,6 +454,57 @@ class DeepPrepAgent:
         return step.feedback
 
     # -- fallback ----------------------------------------------------------- #
+    # -- closing turn ------------------------------------------------------- #
+    def _closing_answer_turn(
+        self,
+        task: ADPTask,
+        env: Environment,
+        tree: ReasoningTree,
+        result: SolveResult,
+        messages: list[Message],
+        feedback: str | None,
+    ) -> None:
+        """Ask once for an ``<answer>`` after the expansion budget is spent."""
+        observation = build_final_answer_prompt(
+            tree.render(max_rows=self.max_rows_in_prompt), feedback
+        )
+        messages.append({"role": "user", "content": observation})
+        try:
+            resp = self.llm.generate(
+                messages, temperature=self.temperature, max_tokens=self.max_tokens
+            )
+        except Exception as e:  # noqa: BLE001 - a dead endpoint must not lose the run
+            result.error = f"LLM call failed: {type(e).__name__}: {e}"
+            result.stop_reason = "llm_error"
+            return
+
+        result.usage.add(resp.usage)
+        messages.append({"role": "assistant", "content": resp.text})
+        parsed = parse_agent_output(resp.text)
+        turn = self.max_turns
+        step = TrajectoryStep(
+            turn=turn,
+            observation=observation,
+            response=resp.text,
+            usage=resp.usage.to_dict(),
+        )
+        if self.verbose:
+            self._log(turn, parsed)
+
+        if parsed.answer is None:
+            # An <expand> here is ignored by construction: the budget is spent.
+            step.error = parsed.error or "MissingAnswer"
+            step.feedback = step.error
+            result.trajectory.append(step)
+            result.n_turns = turn + 1
+            return
+
+        self._finalize(task, env, tree, parsed, result, step)
+        result.trajectory.append(step)
+        result.n_turns = turn + 1
+        if result.table is not None:
+            result.stop_reason = "answered"
+
     def _set_fallback(self, task: ADPTask, tree: ReasoningTree, result: SolveResult) -> None:
         """Record the most promising leaf when the agent never answered.
 

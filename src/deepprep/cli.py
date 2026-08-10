@@ -280,6 +280,10 @@ def cmd_train_grpo(args: argparse.Namespace) -> int:
         kl_coef=args.kl_coef,
         max_turns=args.max_turns,
         use_lora=args.lora,
+        max_new_tokens=args.max_new_tokens,
+        max_length=args.max_length,
+        bf16=not args.no_bf16,
+        gradient_checkpointing=not args.no_gradient_checkpointing,
     )
     GRPOTrainer(cfg).train(tasks)
     return 0
@@ -373,6 +377,14 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--max-turns", type=int, default=5)
     q.add_argument("--limit", type=int, default=None)
     q.add_argument("--lora", action="store_true")
+    # The defaults above are the paper's and assume a GPU; these make a run fit
+    # on smaller hardware without editing the config in code.
+    q.add_argument("--max-new-tokens", type=int, default=2048,
+                   help="generation budget per turn during rollout")
+    q.add_argument("--max-length", type=int, default=8192)
+    q.add_argument("--no-bf16", action="store_true",
+                   help="train in fp32 (bf16 matmuls are very slow on CPU)")
+    q.add_argument("--no-gradient-checkpointing", action="store_true")
     q.set_defaults(func=cmd_train_grpo)
 
     return p

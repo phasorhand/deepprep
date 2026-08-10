@@ -20,6 +20,7 @@ from ..operators import operator_manual
 __all__ = [
     "SYSTEM_PROMPT",
     "TREE_REASONING_EXEMPLAR",
+    "build_final_answer_prompt",
     "build_system_prompt",
     "build_task_prompt",
     "build_turn_prompt",
@@ -223,6 +224,28 @@ def build_turn_prompt(tree_view: str, feedback: str | None, turn: int, max_turns
     else:
         parts += ["", f"Turn {turn + 1} of {max_turns}."]
     parts += ["", _OUTPUT_FORMAT_REMINDER]
+    return "\n".join(parts)
+
+
+def build_final_answer_prompt(tree_view: str, feedback: str | None = None) -> str:
+    """The closing observation, issued once the expansion budget is spent.
+
+    Sec 6.1 bounds *exploration*; committing an answer is not exploration, and a
+    model that spent every turn expanding would otherwise be scored INCOMPLETE
+    even with a matching leaf already materialized.  No `<expand>` is offered
+    here, so the budget stays a budget.
+    """
+    parts = [tree_view]
+    if feedback:
+        parts += ["", "<execute>", feedback, "</execute>"]
+    parts += [
+        "",
+        "Your expansion budget is spent -- you may not expand the tree again.",
+        "Choose the leaf whose state satisfies the target schema and commit it: "
+        "reply with `<plan>` followed by `<answer>` containing the full operator "
+        "pipeline from the root, ending in `Terminate([<table>])`. Emit nothing "
+        "outside those tags.",
+    ]
     return "\n".join(parts)
 
 

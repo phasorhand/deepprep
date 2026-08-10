@@ -100,6 +100,24 @@ def _as_key_string(s: pd.Series) -> pd.Series:
     return s.map(fmt)
 
 
+def _right_suffix(ldf: pd.DataFrame, rdf: pd.DataFrame) -> str:
+    """Pick a right-hand suffix that cannot collide with an existing column.
+
+    Joining one table under two roles (``airport`` as origin and destination) is
+    ordinary relational work, but the second join would reuse ``_right`` for a
+    name the first join already produced, and pandas rejects that outright.
+    ``_right`` is kept whenever it is free so the common single-join case is
+    unaffected.
+    """
+    taken = set(map(str, ldf.columns)) | set(map(str, rdf.columns))
+    overlap = [str(c) for c in rdf.columns if str(c) in set(map(str, ldf.columns))]
+    suffix, n = "_right", 1
+    while any(f"{c}{suffix}" in taken for c in overlap):
+        n += 1
+        suffix = f"_right{n}"
+    return suffix
+
+
 class Join(Operator):
     NAME = "Join"
     CATEGORY = "combination"
@@ -120,7 +138,9 @@ class Join(Operator):
         name = str(p["target"]) if p["target"] else f"{lt.name}_{rt.name}_join"
 
         if how == "cross":
-            out = lt.df.merge(rt.df, how="cross", suffixes=("", "_right"))
+            out = lt.df.merge(
+                rt.df, how="cross", suffixes=("", _right_suffix(lt.df, rt.df))
+            )
             return tables.replace(Table(name=name, df=out.reset_index(drop=True)))
 
         left_keys, right_keys = _split_on(p["on"])
@@ -146,7 +166,11 @@ class Join(Operator):
 
         try:
             out = ldf.merge(
-                rdf, left_on=left_keys, right_on=right_keys, how=how, suffixes=("", "_right")
+                rdf,
+                left_on=left_keys,
+                right_on=right_keys,
+                how=how,
+                suffixes=("", _right_suffix(ldf, rdf)),
             )
         except Exception as e:  # noqa: BLE001
             raise OperatorError(f"Join: {type(e).__name__}: {e}") from e
