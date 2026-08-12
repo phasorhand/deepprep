@@ -6,7 +6,7 @@ spec.  Spider itself is a 1.3 GB download; this fixture reproduces its *shape*
 -- ``database/<db_id>/<db_id>.sqlite`` plus a JSON list of
 ``{db_id, question, query}`` -- at a size that runs in a second.
 
-    python examples/mini_spider/build_db.py [out_dir]
+    python examples/mini_spider/build_db.py [out_dir | --out out_dir]
 
 Two databases with multi-table joins, aggregation and grouping, chosen so the
 reversibility gate of Sec 5.3 has something to reject as well as accept.
@@ -14,9 +14,9 @@ reversibility gate of Sec 5.3 has something to reject as well as accept.
 
 from __future__ import annotations
 
+import argparse
 import json
 import sqlite3
-import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -212,6 +212,21 @@ def build(out_dir: Path) -> Path:
     return spec_path
 
 
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    # Accepted both ways: the README documents the positional form, but `--out`
+    # is what everyone reaches for, and taking argv[1] on faith turned a
+    # mistyped flag into a directory *named* `--out` while the intended
+    # destination stayed empty.
+    ap.add_argument("out_dir", nargs="?", default=None, type=Path)
+    ap.add_argument("--out", dest="out_flag", default=None, type=Path)
+    args = ap.parse_args(argv)
+
+    if args.out_dir is not None and args.out_flag is not None:
+        ap.error("give the output directory once, positionally or with --out")
+    build(args.out_dir or args.out_flag or HERE)
+    return 0
+
+
 if __name__ == "__main__":
-    out = Path(sys.argv[1]) if len(sys.argv) > 1 else HERE
-    build(out)
+    raise SystemExit(main())

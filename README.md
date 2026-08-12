@@ -73,6 +73,30 @@ deepprep demo                       # deterministic scripted agent, no API key n
 deepprep run examples/movies_demo/task.json --model gpt-4o-mini
 ```
 
+`deepprep demo` needs no network and ends in `completed=True  exact match=True`; it is the
+fastest way to confirm an install is sound.
+
+### Against a real backbone
+
+Any OpenAI-compatible endpoint works. DeepSeek, verified end to end:
+
+```bash
+export OPENAI_API_KEY=sk-...
+export OPENAI_BASE_URL=https://api.deepseek.com/v1     # note: /v1, not /anthropic
+deepprep run examples/movies_demo/task.json --model deepseek-chat --exemplar
+```
+
+```
+stop_reason=answered  turns=5  completed=True
+usage={'prompt_tokens': 41788, 'completion_tokens': 1869, 'n_calls': 5, 'wall_time_s': 13.9}
+exact match: True
+```
+
+Two flags matter. `--exemplar` supplies the in-context tree-reasoning demonstration; without
+it an untrained backbone has never seen the `<plan>/<expand>/<answer>` protocol and mostly
+emits prose. `--base-url` must point at the **OpenAI-compatible** route — DeepSeek also
+publishes an Anthropic-Messages endpoint at `/anthropic`, which this client does not speak.
+
 Programmatic use:
 
 ```python
