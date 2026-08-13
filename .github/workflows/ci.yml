@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    # Naming the shell explicitly is what gets `-o pipefail`; the implicit
+    # default omits it. Steps below pipe pytest into `tee`, and without pipefail
+    # the exit status would be tee's -- a failing suite would report green.
+    shell: bash
+
+jobs:
+  test:
+    # Both ends of the `requires-python = ">=3.10"` range declared in
+    # pyproject.toml. Testing only the newest would leave that claim unbacked.
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: |
+          uv venv --python ${{ matrix.python }}
+          uv pip install -e ".[dev,llm]"
+
+      - name: Lint
+        run: .venv/bin/ruff check .
+
+      - name: Test
+        # The training modules are torch-gated and skip without the [train]
+        # extra; installing torch here would triple the job for no new coverage,
+        # since those paths have dedicated tests exercised in the train job.
+        run: .venv/bin/pytest -q
+
+      - name: The documented quickstart still works
+        # tests/test_examples_end_to_end.py calls this in-process. Running the
+        # installed console script too is the only check that the entry point in
+        # pyproject.toml is wired up at all.
+        run: |
+          .venv/bin/deepprep demo | tee /tmp/demo.out
+          grep -q "exact match=True" /tmp/demo.out
+
+      - name: The documented synthesis chain still works
+        run: |
+          .venv/bin/python examples/mini_spider/build_db.py data/mini_spider
+          .venv/bin/deepprep synthesize \
+            --db-root data/mini_spider/database \
+            --spec    data/mini_spider/spec.json \
+            --out     data/tasks/synth_train.jsonl
+          .venv/bin/deepprep build-op-syntax \
+            --tasks data/tasks/synth_train.jsonl \
+            --out   data/sft/op_syntax.jsonl
+
+  train:
+    # Torch is a large install, so the training stack gets one job rather than a
+    # matrix entry. Without it the SFT and GRPO tests silently skip -- which is
+    # how `train-sft` shipped broken once already.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install with the training extra
+        run: |
+          uv venv --python 3.12
+          uv pip install -e ".[dev,llm,train]" --torch-backend cpu
+
+      - name: Test the torch-gated modules
+        # `-ra` surfaces skip reasons, and the guard below turns a silent skip
+        # into a failure: an importorskip that quietly stops running is
+        # indistinguishable from a passing suite, which is the failure mode this
+        # job exists to prevent.
+        run: |
+          .venv/bin/pytest -q -ra \
+            tests/test_sft_loop.py tests/test_grpo_loss.py tests/test_grpo_step.py \
+            | tee /tmp/train.out
+          if grep -qE "[0-9]+ skipped" /tmp/train.out; then
+            echo "::error::torch-gated tests skipped in the job that installs torch"
+            exit 1
+          fi
+
+      - name: Full suite
+        run: .venv/bin/pytest -q
